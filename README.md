@@ -4,6 +4,12 @@ Run **xAI's Grok Build CLI (`grok`) natively on Termux** (Android · aarch64) �
 
 Grok Build ships a **statically-linked musl** aarch64 binary — no interpreter, no glibc — so it runs directly on the kernel and bundles its own TLS roots. It boots native on Termux out of the box. The **only** thing that fails is DNS: musl reads `/etc/resolv.conf`, which can't exist on Termux (`/etc → /system/etc`, read-only), and a *static* binary ignores `LD_PRELOAD` so a preload shim can't help either.
 
+## Demo — Grok explaining its own install
+
+Asked how it's running, Grok inspects its own launcher + binary on-device (Android 17, Pixel 9 Pro XL) and explains why a static musl ELF just runs — the kernel's `binfmt_elf` loader maps it directly, no dynamic linker, no proot, no qemu:
+
+![Grok explains its native install](screenshots/grok-explains-native.png)
+
 ## The fix: one 16-byte patch
 
 There is exactly **one** hardcoded `/etc/resolv.conf` string in the binary. `/sdcard/.grokdns` is also exactly 16 bytes, so we swap them **in place** — no length change, no relocation — and drop a resolv file there:
@@ -66,6 +72,23 @@ If you're rooted (Magisk/APatch), a systemless `/system/etc/resolv.conf` module 
 ```bash
 bash uninstall.sh
 ```
+
+## Part of the native-Termux CLI family
+
+One-command **native, no-proot** installers for AI coding CLIs on Termux — same toolkit, one per agent:
+
+- [claude-code-termux-native](https://github.com/Thr45hx/claude-code-termux-native) — Claude Code
+- [antigravity-cli-termux-native](https://github.com/Thr45hx/antigravity-cli-termux-native) — Google Antigravity
+- [grok-cli-termux-native](https://github.com/Thr45hx/grok-cli-termux-native) — xAI Grok Build
+- [opencode-termux-native](https://github.com/Thr45hx/opencode-termux-native) — OpenCode
+- [copilot-cli-termux-native](https://github.com/Thr45hx/copilot-cli-termux-native) — GitHub Copilot
+
+## Notes
+
+- **AI-assisted:** built and reverse-engineered with AI help — a daily-driver, not a toy. Provided as-is.
+- **Tested on:** Android 17, rooted **Pixel 9 Pro XL** (Tensor G4, aarch64).
+- **Root / no-root:** **No root needed** by default (sdcard byte-patch); rooted users can use a systemless resolv module for the pristine binary.
+- **License:** [MIT](./LICENSE).
 
 ---
 
