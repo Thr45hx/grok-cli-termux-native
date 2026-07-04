@@ -1,12 +1,16 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# install.sh — xAI Grok Build CLI (grok), native on Termux (aarch64). No proot, no root.
+# install.sh — xAI Grok Build CLI (grok), native on Termux (aarch64). No proot.
 #
 # Grok Build is a statically-linked musl binary that runs directly on the kernel.
 # The only thing that fails on Termux is DNS: musl reads /etc/resolv.conf, which
-# can't exist (/etc -> /system/etc, read-only). This installer byte-patches that
-# one hardcoded 16-char string -> /sdcard/.grokdns and keeps that file populated,
-# so DNS resolves natively with zero root and zero proot.
+# can't exist on stock Termux (/etc -> /system/etc, read-only). Two paths, both
+# native (no proot), auto-selected:
+#   • no root → byte-patch that one hardcoded 16-char string -> /sdcard/.grokdns
+#     and keep that file populated (zero root, zero reboot).
+#   • rooted  → if a systemless module already provides a real /etc/resolv.conf,
+#     the PRISTINE binary resolves natively with no patch at all.
+# The installed launcher re-checks this every run and self-corrects.
 #
 set -euo pipefail
 
@@ -30,11 +34,11 @@ case "$(uname -m)" in aarch64|arm64) ;; *) die "arm64/aarch64 only (found $(unam
 
 # source dir (support curl | bash) ------------------------------------------
 SRC="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
-need=0; for f in launcher.sh grok-dns-patch.py; do [ -f "$SRC/$f" ] || need=1; done
+need=0; for f in launcher.sh grok-dns.py; do [ -f "$SRC/$f" ] || need=1; done
 if [ "$need" = 1 ]; then
   command -v curl >/dev/null || die "curl required to fetch sources."
   SRC="$(mktemp -d)"; say "Fetching source files…"
-  for f in launcher.sh grok-dns-patch.py; do curl -fsSL "$RAW/$f" -o "$SRC/$f" || die "fetch $f failed"; done
+  for f in launcher.sh grok-dns.py; do curl -fsSL "$RAW/$f" -o "$SRC/$f" || die "fetch $f failed"; done
 fi
 
 # 1) deps --------------------------------------------------------------------
@@ -64,10 +68,16 @@ fi
 chmod +x "$tmp"
 file "$tmp" | grep -q "statically linked" || say "WARN: binary not statically linked; native path may differ."
 
-# 4) sdcard DNS: file + 16-byte patch ---------------------------------------
-grep -qs nameserver "$DNS" 2>/dev/null || printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > "$DNS" 2>/dev/null || say "WARN: cannot write $DNS — run termux-setup-storage."
-python3 "$SRC/grok-dns-patch.py" "$tmp"
-grep -a -q '/etc/resolv.conf' "$tmp" && die "resolv string still present after patch." || true
+# 4) DNS mode: pristine-native if a real /etc/resolv.conf exists, else sdcard patch
+if [ -s /etc/resolv.conf ] && grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+  say "Rooted resolv module detected — keeping pristine binary (native DNS)."
+  python3 "$SRC/grok-dns.py" "$tmp" native
+else
+  say "No /etc/resolv.conf — byte-patching DNS path to $DNS (no root)."
+  grep -qs nameserver "$DNS" 2>/dev/null || printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > "$DNS" 2>/dev/null || say "WARN: cannot write $DNS — run termux-setup-storage."
+  python3 "$SRC/grok-dns.py" "$tmp" sdcard
+  grep -a -q '/etc/resolv.conf' "$tmp" && die "resolv string still present after patch." || true
+fi
 
 # 5) smoke test (--version needs no DNS) ------------------------------------
 smoke="$(mktemp -d)"
@@ -77,18 +87,19 @@ rm -rf "$smoke"
 # 6) promote + retain latest+prev -------------------------------------------
 mv "$tmp" "$VERSIONS/$VERSION"
 printf '%s\n' "$VERSION" > "$VERSIONS/.verified"
-printf '%s'   "$VERSION" > "$VERSIONS/.dns-patched"
 prev="$(ls -1 "$VERSIONS" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -2 | head -1)"
 for old in "$VERSIONS"/*; do b="$(basename "$old")"; case "$b" in .*) continue;; esac
   [ -f "$old" ] && [ "$b" != "$VERSION" ] && [ "$b" != "$prev" ] && rm -f "$old"; done
 
 # 7) launcher + patcher ------------------------------------------------------
 mkdir -p "$DIR"
-install -m644 "$SRC/grok-dns-patch.py" "$DIR/grok-dns-patch.py"
+install -m644 "$SRC/grok-dns.py" "$DIR/grok-dns.py"
 install -m755 "$SRC/launcher.sh" "$DIR/launcher.sh"
 ln -sf "$DIR/launcher.sh" "$PREFIX/bin/grok"
 
 echo
-say "Installed grok $VERSION — native, no proot, no root."
+say "Installed grok $VERSION — native, no proot."
+say "Updates: press Ctrl+U in grok (or run 'grok update'); the launcher adopts the"
+say "         new version automatically on the next start."
 say "Auth:  export XAI_API_KEY=xai-...   or run 'grok' (browser 'Sign in with Grok')."
 say "Try:   grok -p \"hello from native Termux\""

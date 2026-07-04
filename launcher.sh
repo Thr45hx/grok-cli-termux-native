@@ -1,14 +1,39 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# grok — native Termux launcher (xAI Grok Build, static musl binary). No proot, no root.
+# grok — native Termux launcher (xAI Grok Build, static musl binary). No proot.
 #
-# musl reads /etc/resolv.conf for DNS, which can't exist on Termux (/etc -> /system/etc,
-# read-only) — and a static binary ignores LD_PRELOAD, so a preload shim won't help.
-# Fix: byte-patch the single hardcoded "/etc/resolv.conf" string -> "/sdcard/.grokdns"
-# (same 16 chars) and keep that file populated. Zero root, zero proot. A grok
-# self-update restores the original string, so we re-patch once per version.
-VERSIONS="/data/data/com.termux/files/home/.grok/versions"
-DIR="/data/data/com.termux/files/home/agents/grok"
+# DNS is auto-detected each launch (works root OR no-root):
+#   • rooted  → a systemless module supplies a real /etc/resolv.conf (via
+#     /etc -> /system/etc), so the PRISTINE binary resolves natively, no patch.
+#   • no root → byte-patch the one hardcoded 16-byte "/etc/resolv.conf" string to
+#     "/sdcard/.grokdns" and seed that file. Zero root, zero reboot.
+# grok-dns.py swaps EITHER direction and only writes on an actual change, so it is
+# idempotent and self-correcting: it survives a self-update flipping the string
+# back, and it fixes the binary if you move between rooted and no-root setups.
+VERSIONS="$HOME/.grok/versions"
+DIR="$HOME/agents/grok"
 DNS="/sdcard/.grokdns"
+GROKBIN="$HOME/.grok/bin/grok"
+
+# Adopt grok's own self-updates (Ctrl+U / `grok update`). grok's updater downloads
+# the new binary to ~/.grok/downloads/ and marks it current by repointing the
+# symlink ~/.grok/bin/grok at it — but it never touches versions/ or .verified,
+# which is all this launcher reads. Without this block a self-update silently keeps
+# running the old binary. So: resolve that symlink, parse the version from the
+# filename, and promote it into the versions/ store + repoint .verified.
+upd="$(readlink -f "$GROKBIN" 2>/dev/null || true)"
+case "$upd" in
+  */grok-*-linux-aarch64)
+    uver="${upd##*/grok-}"; uver="${uver%-linux-aarch64}"
+    if [ -f "$upd" ] && printf '%s' "$uver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      if [ ! -f "$VERSIONS/$uver" ]; then
+        cp -f "$upd" "$VERSIONS/$uver" && chmod 700 "$VERSIONS/$uver" \
+          && printf '%s' "$uver" > "$VERSIONS/.verified"
+      elif [ "$(cat "$VERSIONS/.verified" 2>/dev/null || true)" != "$uver" ]; then
+        printf '%s' "$uver" > "$VERSIONS/.verified"
+      fi
+    fi
+    ;;
+esac
 
 verified="$(cat "$VERSIONS/.verified" 2>/dev/null || true)"
 bin=""
@@ -19,16 +44,15 @@ else
     [ -f "$VERSIONS/$c" ] && { bin="$VERSIONS/$c"; break; }
   done
 fi
-[ -n "$bin" ] || { echo "[grok] no installed binary in $VERSIONS — run install." >&2; exit 1; }
+[ -n "$bin" ] || { echo "[grok] no installed binary in $VERSIONS — run install.sh." >&2; exit 1; }
 
-# keep the sdcard resolv file populated
-grep -qs nameserver "$DNS" 2>/dev/null || printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > "$DNS" 2>/dev/null
-
-# byte-patch the binary's resolv path once per version (self-updates reset it)
-if [ "$(cat "$VERSIONS/.dns-patched" 2>/dev/null || true)" != "$verified" ]; then
-  if python3 "$DIR/grok-dns-patch.py" "$bin" 2>/dev/null; then
-    printf '%s' "$verified" > "$VERSIONS/.dns-patched"
-  fi
+# pick DNS mode from whether a real /etc/resolv.conf exists (rooted module)
+if [ -s /etc/resolv.conf ] && grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+  MODE=native
+else
+  MODE=sdcard
+  grep -qs nameserver "$DNS" 2>/dev/null || printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > "$DNS" 2>/dev/null
 fi
+python3 "$DIR/grok-dns.py" "$bin" "$MODE" 2>/dev/null || true
 
 exec "$bin" "$@"
