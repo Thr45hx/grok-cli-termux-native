@@ -22,6 +22,11 @@ Now musl resolves DNS from a file Termux *can* write, with **zero root and zero 
 
 > HTTPS already works — Grok bundles its CA roots. Only DNS needed fixing.
 
+> **The 16-byte trick generalizes to dynamic glibc too.** [thr45hx/camoufox-termux-native](https://github.com/thr45hx/camoufox-termux-native)
+> uses the same byte-for-byte path swap on Debian `libc.so.6` (`/etc/resolv.conf` → `/sdcard/res.conf`,
+> also 16 bytes) to make a glibc Firefox resolve DNS on Android with no root. Different binary type
+> (dynamic glibc vs static musl), different target path, same idea.
+
 ### Rooted? The launcher uses the cleaner path automatically
 
 If you're rooted (Magisk/APatch), a systemless module can supply a real `/etc/resolv.conf` (since `/etc → /system/etc`). When the launcher sees one, it **keeps the binary pristine** and lets musl resolve natively — **no byte-patch at all**. No-root and rooted are the same install; `grok-dns.py` swaps the path either direction and only writes on a real change, so it self-corrects if you move between setups or a self-update resets the string.
