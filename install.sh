@@ -74,7 +74,10 @@ if [ -s /etc/resolv.conf ] && grep -q '^nameserver' /etc/resolv.conf 2>/dev/null
   python3 "$SRC/grok-dns.py" "$tmp" native
 else
   say "No /etc/resolv.conf — byte-patching DNS path to $DNS (no root)."
-  grep -qs nameserver "$DNS" 2>/dev/null || printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > "$DNS" 2>/dev/null || say "WARN: cannot write $DNS — run termux-setup-storage."
+  if ! grep -qs nameserver "$DNS" 2>/dev/null; then
+    printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n' > "$DNS" 2>/dev/null \
+      || { rm -f "$tmp"; die "cannot write $DNS (no storage permission). Run: termux-setup-storage, allow it, then re-run this installer."; }
+  fi
   python3 "$SRC/grok-dns.py" "$tmp" sdcard
   grep -a -q '/etc/resolv.conf' "$tmp" && die "resolv string still present after patch." || true
 fi
